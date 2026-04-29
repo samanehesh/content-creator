@@ -1,0 +1,39 @@
+# Project TODO
+
+- [x] Build a polished single-page dashboard interface with a clean sidebar layout for the full content generation workflow
+- [x] Create a topic input form with an optional primary keyword field
+- [x] Implement secure server-side article generation using the full master prompt without exposing secrets to the browser
+- [x] Build an article review panel for reading, editing, and approving the generated article
+- [x] Automatically extract the article title and summary from structured article output for image generation
+- [x] Implement secure server-side Gemini image generation for 3 branded angles: Overview, Action, and Outcome
+- [x] Preserve the mascot toggle and advanced per-image angle notes behavior from the original prototype
+- [x] Support per-image regeneration with optional revision notes
+- [x] Generate downloadable WebP images with SEO-friendly filenames under 80 KB each
+- [x] Save generation history to the database so past topics, articles, and images can be revisited
+- [x] Show named progress states for article generation and image 1, image 2, and image 3
+- [x] Surface actionable error messages with retry options for each stage
+- [x] Add automated tests covering the new backend logic and key workflow behavior
+- [x] Validate the application in the development environment and prepare it for delivery
+- [x] Add a prompt settings area in the dashboard for editing and saving the master prompt
+- [x] Support using either the saved default master prompt or a run-specific prompt override for each content generation run
+- [x] Persist editable master prompt content safely on the server so it can be reused later
+- [x] Add tests and validation for the prompt settings workflow
+- [x] Add an explicit UI control to choose between the saved default prompt and a one-time prompt override for the next run
+- [x] Run targeted runtime verification for the prompt settings flow, including save, reset, and generation mode behavior
+- [x] Fix the article-generation database update bug that sends an invalid run ID and causes contentRuns status updates to fail
+- [x] Investigate why article generation can exceed the intended 3000-word limit and determine whether prompt-only guidance needs stronger enforcement
+- [x] Enforce the article length target server-side so generated articles do not exceed the configured maximum word count
+- [x] Fix the article generation workflow so it actually researches and inserts internal Mocko links when relevant pages exist
+- [x] Update the saved master prompt and runtime generation logic to support reliable word-count control and visible internal link output
+- [x] Add tests and runtime validation covering word-count enforcement and internal-link insertion
+- [x] Fix the deployed image-generation bug caused by brand assets being loaded from a non-existent dist path during retry and normal image generation
+- [x] Re-run branded image generation in a production-like runtime path until one successful image is created, confirming the asset-loader fix works beyond unit tests and build output
+- [x] Improve Gemini image-generation resilience so temporary 503 high-demand errors during image 2 or image 3 do not break the workflow and are retried automatically with backoff
+- [x] Confirm the configurable maximum retry setting request was mistaken and intentionally defer this feature unless the user explicitly asks for it again
+- [x] Confirm no server-side retry-setting persistence changes will be implemented unless the user explicitly re-requests the feature
+- [x] Confirm no retry-setting tests or runtime validation are needed because the feature is out of scope for the current request
+- [x] Fix the article-generation JSON parsing failure that breaks the workflow at the first stage with malformed model output handling
+- [x] Add a sharing action in the History section so a user can share a selected content run with someone else
+- [x] Design and implement the backend data model and routes needed to expose a shareable history view safely
+- [x] Build the History UI controls for creating and copying a share link for a selected run
+- [x] Add tests and runtime validation for the history-sharing workflow
