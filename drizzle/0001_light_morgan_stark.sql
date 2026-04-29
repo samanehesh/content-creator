@@ -1,0 +1,40 @@
+CREATE TABLE `contentRuns` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`userId` int NOT NULL,
+	`topic` text NOT NULL,
+	`primaryKeyword` varchar(255),
+	`mascotEnabled` int NOT NULL DEFAULT 0,
+	`status` varchar(48) NOT NULL DEFAULT 'draft',
+	`currentStage` varchar(64) NOT NULL DEFAULT 'idle',
+	`lastError` text,
+	`articleTitle` text,
+	`articleSummary` text,
+	`seoTitle` text,
+	`metaDescription` text,
+	`urlSlug` varchar(255),
+	`articleMarkdown` text,
+	`articleApproved` int NOT NULL DEFAULT 0,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `contentRuns_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `generatedImages` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`runId` int NOT NULL,
+	`angleId` int NOT NULL,
+	`angleLabel` varchar(64) NOT NULL,
+	`angleNote` text,
+	`revisionNote` text,
+	`prompt` text NOT NULL,
+	`mimeType` varchar(64) NOT NULL DEFAULT 'image/webp',
+	`storageKey` varchar(255),
+	`imageUrl` text,
+	`fileName` varchar(255),
+	`sizeBytes` int,
+	`width` int,
+	`height` int,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `generatedImages_id` PRIMARY KEY(`id`)
+);
