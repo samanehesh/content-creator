@@ -12,23 +12,34 @@ import {
 } from "./contentService";
 import {
   createContentRun,
+  createBrandProfile,
   createOrGetShareTokenForRun,
+  deleteBrandProfile,
+  getBrandProfileById,
+  getDefaultBrandProfileForUser,
   getContentRunById,
   getSavedPromptForUser,
   getSharedContentRunByToken,
+  listBrandProfilesForUser,
   listContentRunsForUser,
   listGeneratedImagesForRun,
   saveGeneratedArticle,
   savePromptForUser,
   updateContentRunStage,
+  updateBrandProfile,
   upsertGeneratedImage,
 } from "./db";
 
 const articleInputSchema = z.object({
   topic: z.string().trim().min(4).max(240),
   primaryKeyword: z.string().trim().max(240).optional(),
+  brandProfileId: z.number().int().positive(),
   mascotEnabled: z.boolean().default(false),
-  promptOverride: z.string().trim().min(50).max(40000).optional(),
+  runtimeEdits: z.object({
+    masterPromptOverride: z.string().trim().min(50).max(40000).optional(),
+    logoOverride: z.string().trim().max(4000).optional(),
+    referenceOverride: z.string().trim().max(4000).optional(),
+  }).optional(),
 });
 
 const savePromptSchema = z.object({
@@ -62,6 +73,15 @@ const shareRunSchema = z.object({
 const sharedRunSchema = z.object({
   token: z.string().trim().min(16).max(64),
 });
+const brandProfileSchema = z.object({
+  profileName: z.string().trim().min(2).max(200),
+  masterPrompt: z.string().trim().min(50).max(40000),
+  logoStorageKey: z.string().trim().max(1000).optional(),
+  logoUrl: z.string().trim().max(4000).optional(),
+  referenceStorageKey: z.string().trim().max(1000).optional(),
+  referenceUrl: z.string().trim().max(4000).optional(),
+  isDefault: z.boolean().default(false),
+});
 
 async function resolveEffectivePrompt(userId: number, promptOverride?: string) {
   const override = promptOverride?.trim();
@@ -90,6 +110,55 @@ export const appRouter = router({
   content: router({
     history: protectedProcedure.query(async ({ ctx }) => {
       return listContentRunsForUser(ctx.user.id);
+    }),
+    brandProfiles: router({
+      list: protectedProcedure.query(async ({ ctx }) => listBrandProfilesForUser(ctx.user.id)),
+      create: protectedProcedure.input(brandProfileSchema).mutation(async ({ ctx, input }) => {
+        return createBrandProfile(
+          ctx.user.id,
+          input.profileName,
+          input.masterPrompt,
+          input.logoStorageKey,
+          input.logoUrl,
+          input.referenceStorageKey,
+          input.referenceUrl,
+          input.isDefault,
+        );
+      }),
+      update: protectedProcedure
+        .input(brandProfileSchema.extend({ profileId: z.number().int().positive() }))
+        .mutation(async ({ ctx, input }) => {
+          const existing = await getBrandProfileById(input.profileId);
+          if (!existing || existing.userId !== ctx.user.id) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Brand profile not found." });
+          }
+          return updateBrandProfile(input.profileId, {
+            profileName: input.profileName,
+            masterPrompt: input.masterPrompt,
+            logoStorageKey: input.logoStorageKey,
+            logoUrl: input.logoUrl,
+            referenceStorageKey: input.referenceStorageKey,
+            referenceUrl: input.referenceUrl,
+            isDefault: input.isDefault,
+          });
+        }),
+      delete: protectedProcedure
+        .input(z.object({ profileId: z.number().int().positive() }))
+        .mutation(async ({ ctx, input }) => {
+          const existing = await getBrandProfileById(input.profileId);
+          if (!existing || existing.userId !== ctx.user.id) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Brand profile not found." });
+          }
+          await deleteBrandProfile(input.profileId);
+          return { success: true } as const;
+        }),
+      get: protectedProcedure.input(z.object({ profileId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+        const existing = await getBrandProfileById(input.profileId);
+        if (!existing || existing.userId !== ctx.user.id) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Brand profile not found." });
+        }
+        return existing;
+      }),
     }),
 
     promptSettings: protectedProcedure.query(async ({ ctx }) => {
@@ -124,13 +193,27 @@ export const appRouter = router({
       }),
 
     generateArticle: protectedProcedure.input(articleInputSchema).mutation(async ({ ctx, input }) => {
-      const effectivePrompt = await resolveEffectivePrompt(ctx.user.id, input.promptOverride);
+      const selectedProfile = await getBrandProfileById(input.brandProfileId)
+        || await getDefaultBrandProfileForUser(ctx.user.id);
+      if (!selectedProfile || selectedProfile.userId !== ctx.user.id) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "The selected brand profile could not be found." });
+      }
+      const effectivePrompt = input.runtimeEdits?.masterPromptOverride?.trim() || selectedProfile.masterPrompt.trim();
+      const effectiveLogo = input.runtimeEdits?.logoOverride?.trim() || selectedProfile.logoUrl || null;
+      const effectiveReference = input.runtimeEdits?.referenceOverride?.trim() || selectedProfile.referenceUrl || null;
       const runId = await createContentRun({
         userId: ctx.user.id,
         topic: input.topic,
         primaryKeyword: input.primaryKeyword,
         mascotEnabled: input.mascotEnabled,
         promptSnapshot: effectivePrompt,
+        brandProfileId: selectedProfile.id,
+        brandProfileNameSnapshot: selectedProfile.profileName,
+        masterPromptSnapshot: effectivePrompt,
+        logoSnapshotKey: selectedProfile.logoStorageKey,
+        logoSnapshotUrl: effectiveLogo,
+        referenceSnapshotKey: selectedProfile.referenceStorageKey,
+        referenceSnapshotUrl: effectiveReference,
       });
 
       await updateContentRunStage({
@@ -160,6 +243,10 @@ export const appRouter = router({
           ...article,
           mascotEnabled: input.mascotEnabled,
           promptSnapshot: effectivePrompt,
+          brandProfileId: selectedProfile.id,
+          brandProfileNameSnapshot: selectedProfile.profileName,
+          logoSnapshotUrl: effectiveLogo,
+          referenceSnapshotUrl: effectiveReference,
           images: [],
         };
       } catch (error) {
@@ -238,6 +325,10 @@ export const appRouter = router({
           angleNote: input.angleNote,
           revisionNote: input.revisionNote,
           mascotEnabled: input.mascotEnabled,
+          // read from run snapshot, not mutable profile
+          masterPromptSnapshot: run.masterPromptSnapshot,
+          logoSnapshotUrl: run.logoSnapshotUrl,
+          referenceSnapshotUrl: run.referenceSnapshotUrl,
         });
 
         await upsertGeneratedImage(ctx.user.id, input.runId, image);
