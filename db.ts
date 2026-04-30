@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import {
+  brandProfiles,
   contentRuns,
   generatedImages,
+  InsertBrandProfile,
   InsertGeneratedImage,
   InsertUser,
   userPromptSettings,
@@ -12,11 +15,13 @@ import {
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _pool: Pool | null = null;
 
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _pool = new Pool({ connectionString: process.env.DATABASE_URL });
+      _db = drizzle(_pool);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -76,7 +81,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     updateSet.lastSignedIn = new Date();
   }
 
-  await db.insert(users).values(values).onDuplicateKeyUpdate({
+  await db.insert(users).values(values).onConflictDoUpdate({
+    target: users.openId,
     set: updateSet,
   });
 }
@@ -171,6 +177,13 @@ export async function createContentRun(input: {
   primaryKeyword?: string;
   mascotEnabled: boolean;
   promptSnapshot?: string | null;
+  brandProfileId?: number | null;
+  brandProfileNameSnapshot?: string | null;
+  masterPromptSnapshot?: string | null;
+  logoSnapshotKey?: string | null;
+  logoSnapshotUrl?: string | null;
+  referenceSnapshotKey?: string | null;
+  referenceSnapshotUrl?: string | null;
 }) {
   const db = await getDb();
   if (!db) {
@@ -181,11 +194,18 @@ export async function createContentRun(input: {
     userId: input.userId,
     topic: input.topic,
     primaryKeyword: input.primaryKeyword || null,
-    mascotEnabled: input.mascotEnabled ? 1 : 0,
+    mascotEnabled: input.mascotEnabled,
     status: "draft",
     currentStage: "idle",
-    articleApproved: 0,
+    articleApproved: false,
     promptSnapshot: input.promptSnapshot?.trim() || null,
+    brandProfileId: input.brandProfileId ?? null,
+    brandProfileNameSnapshot: input.brandProfileNameSnapshot?.trim() || null,
+    masterPromptSnapshot: input.masterPromptSnapshot?.trim() || null,
+    logoSnapshotKey: input.logoSnapshotKey?.trim() || null,
+    logoSnapshotUrl: input.logoSnapshotUrl?.trim() || null,
+    referenceSnapshotKey: input.referenceSnapshotKey?.trim() || null,
+    referenceSnapshotUrl: input.referenceSnapshotUrl?.trim() || null,
   });
 
   return readInsertId(result);
@@ -296,6 +316,12 @@ export async function saveGeneratedArticle(input: {
   status: string;
   mascotEnabled: boolean;
   lastError?: string | null;
+  generatedImageMetadata?: Array<{
+    angleId: number;
+    provider?: string | null;
+    model?: string | null;
+    revisedPrompt?: string | null;
+  }>;
 }) {
   const db = await getDb();
   if (!db) {
@@ -312,13 +338,141 @@ export async function saveGeneratedArticle(input: {
       metaDescription: input.metaDescription,
       urlSlug: input.urlSlug,
       articleApproved: input.articleApproved ? 1 : 0,
-      mascotEnabled: input.mascotEnabled ? 1 : 0,
+      mascotEnabled: input.mascotEnabled,
       currentStage: input.currentStage,
       status: input.status,
       lastError: input.lastError ?? null,
       updatedAt: new Date(),
     })
     .where(and(eq(contentRuns.id, input.runId), eq(contentRuns.userId, input.userId)));
+
+  if (input.generatedImageMetadata?.length) {
+    for (const metadata of input.generatedImageMetadata) {
+      await db
+        .update(generatedImages)
+        .set({
+          provider: metadata.provider?.trim() || "openai",
+          model: metadata.model?.trim() || null,
+          revisedPrompt: metadata.revisedPrompt?.trim() || null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(generatedImages.runId, input.runId), eq(generatedImages.angleId, metadata.angleId)));
+    }
+  }
+}
+
+export async function createBrandProfile(
+  userId: number,
+  profileName: string,
+  masterPrompt: string,
+  logoStorageKey?: string | null,
+  logoUrl?: string | null,
+  referenceStorageKey?: string | null,
+  referenceUrl?: string | null,
+  isDefault = false,
+) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database is not available.");
+  }
+
+  const values: InsertBrandProfile = {
+    userId,
+    profileName: profileName.trim(),
+    masterPrompt: masterPrompt.trim(),
+    logoStorageKey: logoStorageKey?.trim() || null,
+    logoUrl: logoUrl?.trim() || null,
+    referenceStorageKey: referenceStorageKey?.trim() || null,
+    referenceUrl: referenceUrl?.trim() || null,
+    isDefault,
+  };
+
+  const result = await db.insert(brandProfiles).values(values);
+  const id = readInsertId(result);
+  const created = await getBrandProfileById(id);
+  if (!created) {
+    throw new Error("Brand profile was created but could not be loaded.");
+  }
+  return created;
+}
+
+export async function getBrandProfileById(profileId: number) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database is not available.");
+  }
+
+  const rows = await db.select().from(brandProfiles).where(eq(brandProfiles.id, profileId)).limit(1);
+  return rows[0];
+}
+
+export async function listBrandProfilesForUser(userId: number) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database is not available.");
+  }
+
+  return db
+    .select()
+    .from(brandProfiles)
+    .where(eq(brandProfiles.userId, userId))
+    .orderBy(desc(brandProfiles.createdAt))
+    .limit(3);
+}
+
+export async function updateBrandProfile(
+  profileId: number,
+  updates: {
+    profileName?: string;
+    masterPrompt?: string;
+    logoStorageKey?: string | null;
+    logoUrl?: string | null;
+    referenceStorageKey?: string | null;
+    referenceUrl?: string | null;
+    isDefault?: boolean;
+  },
+) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database is not available.");
+  }
+
+  const updateSet: Record<string, unknown> = {
+    updatedAt: new Date(),
+  };
+  if (updates.profileName !== undefined) updateSet.profileName = updates.profileName.trim();
+  if (updates.masterPrompt !== undefined) updateSet.masterPrompt = updates.masterPrompt.trim();
+  if (updates.logoStorageKey !== undefined) updateSet.logoStorageKey = updates.logoStorageKey?.trim() || null;
+  if (updates.logoUrl !== undefined) updateSet.logoUrl = updates.logoUrl?.trim() || null;
+  if (updates.referenceStorageKey !== undefined) updateSet.referenceStorageKey = updates.referenceStorageKey?.trim() || null;
+  if (updates.referenceUrl !== undefined) updateSet.referenceUrl = updates.referenceUrl?.trim() || null;
+  if (updates.isDefault !== undefined) updateSet.isDefault = updates.isDefault;
+
+  await db.update(brandProfiles).set(updateSet).where(eq(brandProfiles.id, profileId));
+  return getBrandProfileById(profileId);
+}
+
+export async function deleteBrandProfile(profileId: number) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database is not available.");
+  }
+
+  await db.delete(brandProfiles).where(eq(brandProfiles.id, profileId));
+}
+
+export async function getDefaultBrandProfileForUser(userId: number) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database is not available.");
+  }
+
+  const rows = await db
+    .select()
+    .from(brandProfiles)
+    .where(and(eq(brandProfiles.userId, userId), eq(brandProfiles.isDefault, true)))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function getGeneratedImageForAngle(runId: number, angleId: number) {
@@ -361,6 +515,9 @@ export async function upsertGeneratedImage(
         angleNote: image.angleNote ?? null,
         revisionNote: image.revisionNote ?? null,
         prompt: image.prompt,
+        provider: image.provider ?? "openai",
+        model: image.model ?? null,
+        revisedPrompt: image.revisedPrompt ?? null,
         mimeType: image.mimeType,
         storageKey: image.storageKey ?? null,
         imageUrl: image.imageUrl ?? null,
@@ -377,6 +534,9 @@ export async function upsertGeneratedImage(
 
   const result = await db.insert(generatedImages).values({
     ...image,
+    provider: image.provider ?? "openai",
+    model: image.model ?? null,
+    revisedPrompt: image.revisedPrompt ?? null,
     runId,
   });
 
